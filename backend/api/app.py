@@ -31,11 +31,12 @@ import subprocess
 import gzip
 import threading
 import time
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Imports de bibliotecas de terceiros
 # ---------------------------------------------------------------------------
-from flask import Flask, jsonify, make_response, request, send_file, send_from_directory
+from flask import Flask, abort, jsonify, make_response, request, send_file, send_from_directory
 from flask_cors import CORS
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -93,7 +94,10 @@ else:
 # Inicializacao da aplicacao Flask e CORS
 # ---------------------------------------------------------------------------
 app = Flask(__name__, static_folder=None)
-CORS(app)  # Habilita cross-origin — necessario para dev local com portas diferentes
+origens_cors = [origem.strip() for origem in os.getenv("CORS_ORIGINS", "").split(",") if origem.strip()]
+if origens_cors:
+    CORS(app, resources={r"/api/*": {"origins": origens_cors}})
+app.config["DEV_RELOAD"] = os.getenv("DEV_RELOAD", "0").lower() in ("1", "true", "yes", "on")
 
 # Tamanho maximo (em bytes) de uma resposta JSON para aplicar compressao gzip.
 # Respostas acima desse limite sao enviadas sem compressao para evitar pico de memoria.
@@ -145,8 +149,7 @@ SCRIPT_AUTO_RELOAD_DEV = """
 def _serve_html_with_dev_reload(caminho_arquivo: str):
     """Le um arquivo HTML e injeta o snippet de auto-reload para uso local.
 
-    O snippet so e ativado em localhost/127.0.0.1, portanto e seguro injetar
-    em todos os HTMLs sem risco de impactar producao.
+    O snippet exige DEV_RELOAD=1 e so faz polling em localhost/127.0.0.1.
     """
     # Tenta UTF-8 primeiro; fallback latin-1 para arquivos legados
     try:
@@ -156,11 +159,12 @@ def _serve_html_with_dev_reload(caminho_arquivo: str):
         with open(caminho_arquivo, "r", encoding="latin-1") as arquivo:
             conteudo_html = arquivo.read()
 
-    # Injeta antes do </body> para nao bloquear renderizacao
-    if "</body>" in conteudo_html:
-        conteudo_html = conteudo_html.replace("</body>", SCRIPT_AUTO_RELOAD_DEV + "\n</body>", 1)
-    else:
-        conteudo_html = conteudo_html + SCRIPT_AUTO_RELOAD_DEV
+    if app.config["DEV_RELOAD"]:
+        # Injeta antes do </body> somente quando solicitado para desenvolvimento.
+        if "</body>" in conteudo_html:
+            conteudo_html = conteudo_html.replace("</body>", SCRIPT_AUTO_RELOAD_DEV + "\n</body>", 1)
+        else:
+            conteudo_html = conteudo_html + SCRIPT_AUTO_RELOAD_DEV
 
     resposta = make_response(conteudo_html)
     # Cabecalhos no-cache: browser sempre busca a versao mais recente
@@ -588,19 +592,18 @@ def home():
 
 @app.route("/<path:caminho>")
 def static_files(caminho):
-    """Entrega arquivos estaticos do frontend, injetando auto-reload em paginas HTML."""
-    # Tenta primeiro na pasta frontend/
-    alvo_frontend = os.path.join(DIRETORIO_FRONTEND, caminho)
-    if os.path.isfile(alvo_frontend):
-        if caminho.lower().endswith(".html"):
-            return _serve_html_with_dev_reload(alvo_frontend)
-        return send_from_directory(DIRETORIO_FRONTEND, caminho)
-
-    # Fallback: tenta na raiz do projeto (ex: arquivos de impressao, modelos)
-    alvo_projeto = os.path.join(RAIZ_PROJETO, caminho)
-    if caminho.lower().endswith(".html") and os.path.isfile(alvo_projeto):
-        return _serve_html_with_dev_reload(alvo_projeto)
-    return send_from_directory(RAIZ_PROJETO, caminho)
+    """Serve somente arquivos publicos dentro de frontend/, inclusive para HTML."""
+    raiz_publica = Path(DIRETORIO_FRONTEND).resolve()
+    alvo = (raiz_publica / caminho).resolve()
+    try:
+        relativo = alvo.relative_to(raiz_publica)
+    except ValueError:
+        abort(404)
+    if any(parte.startswith(".") for parte in relativo.parts) or not alvo.is_file():
+        abort(404)
+    if alvo.suffix.lower() == ".html":
+        return _serve_html_with_dev_reload(str(alvo))
+    return send_from_directory(raiz_publica, relativo.as_posix())
 
 
 @app.after_request
@@ -736,7 +739,7 @@ def buscar_fichas():
         registros = _query_all(consulta, parametros)
         dados = [_map_banco_dados_to_api(r) for r in registros]
         if usar_cache:
-            _cache_set(chave_cache, dados, ttl_seconds=20)
+            _cache_set(chave_cache, dados, ttl_segundos=20)
         resposta = jsonify(dados)
         if usar_cache:
             resposta.headers["X-Data-Cache"] = "MISS"
@@ -909,7 +912,7 @@ def obter_ficha(ficha_id):
         if not ficha:
             return jsonify({"error": "Ficha nao encontrada"}), 404
         dados = _map_banco_dados_to_api(ficha)
-        _cache_set(chave_cache, dados, ttl_seconds=30)
+        _cache_set(chave_cache, dados, ttl_segundos=30)
         resposta = jsonify(dados)
         resposta.headers["X-Data-Cache"] = "MISS"
         return resposta, 200
@@ -961,8 +964,10 @@ def health_check():
 @app.route("/__dev_timestamp", methods=["GET"])
 def dev_timestamp():
     """Retorna o timestamp do arquivo estatico mais recente; usado pelo auto-reload local."""
+    if not app.config["DEV_RELOAD"]:
+        abort(404)
     try:
-        diretorios_raiz = [DIRETORIO_FRONTEND, RAIZ_PROJETO]
+        diretorios_raiz = [DIRETORIO_FRONTEND]
         extensoes = {".html", ".css", ".js"}
         mais_recente = 0.0
 
@@ -986,8 +991,8 @@ def dev_timestamp():
 
 
 if __name__ == "__main__":
-    # Vincula em todas as interfaces para o site ser acessivel da LAN e de tuneis
-    host_servidor = os.getenv("FLASK_HOST", "0.0.0.0")
+    # Acesso de rede deve ser configurado explicitamente, pois a API nao autentica usuarios.
+    host_servidor = os.getenv("FLASK_HOST", "127.0.0.1")
     porta = int(os.getenv("PORT", "5000"))
     modo_debug = os.getenv("FLASK_DEBUG", "0").strip().lower() in ("1", "true", "yes", "on")
     app.run(debug=modo_debug, port=porta, host=host_servidor, use_reloader=False)

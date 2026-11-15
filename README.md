@@ -109,12 +109,29 @@ que não estão incluídos na cópia pública.
 | POST | `/api/fichas` | Bloqueado: somente leitura |
 | PUT / DELETE | `/api/ficha/<id>` | Bloqueado: somente leitura |
 
+## Verificações de desenvolvimento
+
+```bash
+python -m unittest discover -s backend/tests -v
+```
+
+Os testes usam o cliente Flask e banco simulado, sem credenciais ou dumps.
+Cobrem acesso a arquivos, cache de consultas, expiração e bloqueio das escritas.
+O GitHub Actions executa essa suíte a cada push e pull request.
+Os testes de integração com MariaDB e exportação completa ainda dependem do
+schema de demonstração pendente.
+
+O servidor usa `127.0.0.1` por padrão e serve arquivos somente de `frontend/`.
+`DEV_RELOAD=1` habilita o monitor de arquivos para desenvolvimento.
+Para frontend em outra origem, defina explicitamente `CORS_ORIGINS` no `.env`.
+Nenhuma origem adicional é habilitada por padrão.
+
 ## Próximos passos
 
 - Publicar um schema de demonstração compatível, com dados sintéticos e setup validado.
 - Implementar autenticação e autorização no backend antes de uma implantação.
 - Separar rotas, acesso ao banco e regras de negócio.
-- Adicionar testes automatizados de consulta, filtros e exportação.
+- Ampliar os testes para integração com MariaDB e exportação.
 
 ## Contexto e autoria
 
