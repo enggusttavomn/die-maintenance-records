@@ -23,7 +23,7 @@ set "DB_START_SCRIPT=%PROJECT_ROOT%\backend\scripts\start_local_mariadb.ps1"
 set "LOG_DIR=%PROJECT_ROOT%\backend\logs"
 set "CRASH_LOG=%LOG_DIR%\server_crash.log"
 
-if "%FLASK_HOST%"=="" set "FLASK_HOST=0.0.0.0"
+if "%FLASK_HOST%"=="" set "FLASK_HOST=127.0.0.1"
 if "%PORT%"=="" set "PORT=5000"
 if "%FLASK_DEBUG%"=="" set "FLASK_DEBUG=0"
 if "%AUTO_RESTART%"=="" set "AUTO_RESTART=1"
